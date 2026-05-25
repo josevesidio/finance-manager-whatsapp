@@ -9,9 +9,14 @@ import {
     registrarAssinatura,
     registrarDivisao,
     obterResumoMensal,
+    obterTransacoesMensais,
     buscarAssinaturaAtivaPorDescricao,
     desativarAssinatura
 } from '../../services/finance-service.js';
+import { parsearMesAno } from '../../utils/date-utils.js';
+import { gerarCsvTransacoes } from '../../utils/csv-helper.js';
+import whatsapp from 'whatsapp-web.js';
+const { MessageMedia } = whatsapp;
 import { 
     criarLembrete, 
     listarLembretesAtivos, 
@@ -39,9 +44,17 @@ async function responderBot(message, texto) {
 }
 
 // Formatação do resumo mensal em texto
-async function formatarResumoMensal(nome) {
-    const resumo = await obterResumoMensal(nome);
-    let texto = `💰 *Resumo Financeiro - Mês Atual*\n👤 Usuário: *${nome}*\n\n`;
+async function formatarResumoMensal(nome, mes = null, ano = null) {
+    const resumo = await obterResumoMensal(nome, mes, ano);
+    
+    const agora = new Date();
+    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
+    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
+    const dataRef = new Date(a, m, 1);
+    const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    const nomeMesCapitalizado = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
+
+    let texto = `💰 *Resumo Financeiro - ${nomeMesCapitalizado}*\n👤 Usuário: *${nome}*\n\n`;
     texto += `🟢 *Entradas:* R$ ${resumo.entradas.toFixed(2)}\n`;
     texto += `🔴 *Saídas/Gastos:* R$ ${resumo.saidas.toFixed(2)}\n`;
     
@@ -73,24 +86,34 @@ async function formatarResumoMensal(nome) {
 }
 
 // Formatação do relatório completo (resumo + transações)
-async function formatarRelatorioCompleto(nome) {
-    const resumoFormatado = await formatarResumoMensal(nome);
+async function formatarRelatorioCompleto(nome, mes = null, ano = null) {
+    const resumoFormatado = await formatarResumoMensal(nome, mes, ano);
     
-    // Busca últimos lançamentos gerais
-    const lancamentos = await buscarUltimosLancamentos(null, 20, false);
-    // Filtra transações do usuário específico
-    const meusLancamentos = lancamentos.filter(l => l.person === nome);
+    // Busca lançamentos de todos os usuários do período desejado
+    const meusLancamentos = await obterTransacoesMensais(mes, ano);
 
-    let texto = resumoFormatado + `\n📝 *Últimos Lançamentos (Mês Vigente):*\n`;
+    const agora = new Date();
+    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
+    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
+    const dataRef = new Date(a, m, 1);
+    const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    const nomeMesCapitalizado = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
+
+    let texto = resumoFormatado + `\n📝 *Lançamentos de ${nomeMesCapitalizado}:*\n`;
     if (meusLancamentos.length === 0) {
-        texto += `_Nenhum lançamento recente encontrado._`;
+        texto += `_Nenhum lançamento encontrado para este período._`;
     } else {
-        meusLancamentos.slice(0, 5).forEach(l => {
+        // Mostra os lançamentos do mês em texto, limitando a 15 itens
+        const limiteVisualizacao = meusLancamentos.slice(0, 15);
+        limiteVisualizacao.forEach(l => {
             const dataStr = new Date(l.date).toLocaleDateString('pt-BR');
             const valor = l.type === 'parcelado' ? l.valuePerMonth : l.value;
             const sinal = l.type === 'entrada' ? '🟢 +' : '🔴 -';
-            texto += `[${dataStr}] ${sinal} R$ ${valor.toFixed(2)} - ${l.description} (${l.category || 'outros'})\n`;
+            texto += `[${dataStr}] (${l.person || 'N/A'}) ${sinal} R$ ${valor.toFixed(2)} - ${l.description} (${l.category || 'outros'})\n`;
         });
+        if (meusLancamentos.length > 15) {
+            texto += `\n_... e mais ${meusLancamentos.length - 15} lançamentos. Para ver tudo, peça o resumo em CSV!_\n`;
+        }
     }
 
     return texto;
@@ -214,14 +237,47 @@ export default {
             }
 
             if (comando === 'resumo' || comando === 'gastos') {
-                const resumo = await formatarResumoMensal(nome);
+                const textoArg = args.join(' ');
+                const { mes, ano } = parsearMesAno(textoArg);
+                const resumo = await formatarResumoMensal(nome, mes, ano);
                 await responderBot(message, resumo);
                 return;
             }
 
             if (comando === 'relatorio') {
-                const relatorio = await formatarRelatorioCompleto(nome);
+                const textoArg = args.join(' ');
+                const { mes, ano } = parsearMesAno(textoArg);
+                const relatorio = await formatarRelatorioCompleto(nome, mes, ano);
                 await responderBot(message, relatorio);
+                return;
+            }
+
+            if (comando === 'csv') {
+                const textoArg = args.join(' ');
+                const { mes, ano } = parsearMesAno(textoArg);
+                
+                try {
+                    const transacoes = await obterTransacoesMensais(mes, ano);
+                    if (transacoes.length === 0) {
+                        const dataRef = new Date(ano, mes - 1, 1);
+                        const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+                        await responderBot(message, `🗂️ Não foram encontrados lançamentos para o período de *${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}*.`);
+                        return;
+                    }
+
+                    const csvString = gerarCsvTransacoes(transacoes, nome, mes, ano);
+                    const base64Data = Buffer.from(csvString, 'utf-8').toString('base64');
+                    
+                    const dataRef = new Date(ano, mes - 1, 1);
+                    const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long' });
+                    const filename = `resumo_${nomeMes.toLowerCase()}_${ano}.csv`;
+                    
+                    const media = new MessageMedia('text/csv', base64Data, filename);
+                    await message.reply(media);
+                } catch (err) {
+                    console.error('Erro ao gerar CSV por comando:', err);
+                    await responderBot(message, '❌ Ocorreu um erro ao gerar o arquivo CSV.');
+                }
                 return;
             }
 
@@ -277,6 +333,15 @@ async function processarMensagem(textoMensagem, remetenteId, nome, message) {
     const resultado = await classificarMensagem(textoMensagem);
 
     console.log('Classificação do Gemini:', resultado);
+
+    if (resultado.tipo === 'erro') {
+        if (resultado.erro === 'limite_excedido') {
+            await responderBot(message, '⚠️ *Limite de IA Atingido!*\n\nO limite de requisições do Gemini foi excedido temporariamente (cota diária ou por minuto). Por favor, tente novamente em alguns instantes ou use os comandos diretos (ex: `!resumo`, `!csv`, `!ajuda`).');
+        } else {
+            console.error('Erro desconhecido na classificação da IA:', resultado.mensagem);
+        }
+        return;
+    }
 
     if (resultado.tipo === 'irrelevante') {
         return;
@@ -387,7 +452,39 @@ async function processarMensagem(textoMensagem, remetenteId, nome, message) {
             confirmacao = `✅ *Lembrete agendado com sucesso!*\n👤 Pessoa: ${nome}\n📝 Conta: ${resultado.descricao}\n💰 Valor: R$ ${resultado.valor.toFixed(2)}\n📆 Vencimento: Todo dia ${resultado.diaVencimento}\n📌 Eu avisarei no chat na manhã do vencimento.`;
         }
         else if (resultado.tipo === 'relatorio') {
-            confirmacao = await formatarRelatorioCompleto(nome);
+            const mes = resultado.mes;
+            const ano = resultado.ano;
+            
+            if (resultado.formato === 'csv') {
+                // Fluxo de geração e envio de arquivo CSV
+                const periodo = parsearMesAno(mes && ano ? `${mes}/${ano}` : (mes ? `${mes}` : null));
+                const transacoes = await obterTransacoesMensais(periodo.mes, periodo.ano);
+                
+                const dataRef = new Date(periodo.ano, periodo.mes - 1, 1);
+                const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+                const nomeMesCapitalizado = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
+                
+                if (transacoes.length === 0) {
+                    confirmacao = `🗂️ Não foram encontrados lançamentos para o período de *${nomeMesCapitalizado}* para gerar o CSV.`;
+                } else {
+                    try {
+                        const csvString = gerarCsvTransacoes(transacoes, nome, periodo.mes, periodo.ano);
+                        const base64Data = Buffer.from(csvString, 'utf-8').toString('base64');
+                        const filename = `resumo_${dataRef.toLocaleDateString('pt-BR', { month: 'long' }).toLowerCase()}_${periodo.ano}.csv`;
+                        
+                        const media = new MessageMedia('text/csv', base64Data, filename);
+                        await message.reply(media);
+                        confirmacao = `📊 Aqui está o seu relatório em CSV referente a *${nomeMesCapitalizado}*!`;
+                    } catch (csvErr) {
+                        console.error('Erro ao gerar CSV via IA:', csvErr);
+                        confirmacao = '❌ Desculpe, ocorreu um erro técnico ao gerar o seu arquivo CSV.';
+                    }
+                }
+            } else {
+                // Fluxo de texto normal
+                const periodo = parsearMesAno(mes && ano ? `${mes}/${ano}` : (mes ? `${mes}` : null));
+                confirmacao = await formatarRelatorioCompleto(nome, periodo.mes, periodo.ano);
+            }
         }
 
         await responderBot(message, confirmacao);

@@ -91,10 +91,13 @@ export async function registrarDivisao(nomeSolicitante, valorTotal, descricao, l
     return await Transaction.bulkCreate(transacoes);
 }
 
-export async function obterResumoMensal(nomeUsuario) {
+export async function obterResumoMensal(nomeUsuario, mes = null, ano = null) {
     const agora = new Date();
-    const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1, 0, 0, 0, 0);
-    const fimMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 23, 59, 59, 999);
+    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
+    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
+
+    const inicioMes = new Date(a, m, 1, 0, 0, 0, 0);
+    const fimMes = new Date(a, m + 1, 0, 23, 59, 59, 999);
 
     // 1. Busca todas as transações do usuário no mês atual (exceto templates de assinaturas)
     const transacoes = await Transaction.findAll({
@@ -142,6 +145,25 @@ export async function obterResumoMensal(nomeUsuario) {
         limiteGastos,
         porcentagemLimite
     };
+}
+
+export async function obterTransacoesMensais(mes = null, ano = null) {
+    const agora = new Date();
+    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
+    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
+
+    const inicioMes = new Date(a, m, 1, 0, 0, 0, 0);
+    const fimMes = new Date(a, m + 1, 0, 23, 59, 59, 999);
+
+    return await Transaction.findAll({
+        where: {
+            type: { [Op.ne]: 'assinatura' },
+            date: {
+                [Op.between]: [inicioMes, fimMes]
+            }
+        },
+        order: [['date', 'ASC']]
+    });
 }
 
 export async function buscarUltimosLancamentos(termoBusca, limite = 5, incluirAssinaturas = false) {
@@ -196,6 +218,7 @@ export default {
     registrarAssinatura,
     registrarDivisao,
     obterResumoMensal,
+    obterTransacoesMensais,
     buscarAssinaturaAtivaPorDescricao,
     desativarAssinatura
 };

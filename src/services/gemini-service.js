@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ 
+    // model: 'gemini-2.5-flash',
     model: 'gemini-2.5-flash-lite',
     generationConfig: { responseMimeType: 'application/json' }
 });
@@ -19,7 +20,7 @@ Classifique a mensagem em um dos seguintes tipos:
 - "limite": quando o usuário quer definir seu limite ou meta de gastos mensal (ex: "definir meu limite de gastos em 2000 reais", "quero colocar minha meta de despesa em 1500")
 - "lembrete": quando o usuário quer agendar um lembrete de conta a vencer (ex: "lembrar de pagar a internet de 100 reais dia 10", "lembrar do aluguel dia 5 valor 1200")
 - "cancelamento": quando o usuário quer cancelar ou desativar uma assinatura recorrente ativa (ex: "cancelei a netflix", "cancela assinatura do spotify", "desativa a recorrência da academia")
-- "relatorio": quando o usuário solicita um resumo, saldo ou relatório de seus gastos (ex: "quanto gastei esse mês?", "me dá um resumo", "saldo atual")
+- "relatorio": quando o usuário solicita um resumo, saldo, planilha ou relatório de seus gastos (ex: "quanto gastei esse mês?", "me dá um resumo", "saldo atual", "gerar csv de maio", "resumo em excel")
 - "irrelevante": mensagem que não é sobre finanças ou comandos suportados
 
 Regras para Categoria:
@@ -56,7 +57,8 @@ Para cancelamento:
 {"tipo": "cancelamento", "descricao": "Netflix"}
 
 Para relatorio:
-{"tipo": "relatorio"}
+{"tipo": "relatorio", "formato": "texto" | "csv", "mes": 5, "ano": 2026}
+(O formato deve ser "csv" se o usuário solicitar explicitamente uma planilha, arquivo csv, tabela, arquivo excel ou similar. Caso contrário, use "texto". Os campos "mes" (1 a 12) e "ano" (quatro dígitos) representam o período do resumo solicitado. Se o usuário não especificar o período, use null para ambos. Deduza períodos relativos como "mês passado" a partir da data de referência fornecida no início do texto).
 
 Para irrelevante:
 {"tipo": "irrelevante"}
@@ -69,9 +71,13 @@ Regras Gerais:
 
 export async function classificarMensagem(textoMensagem) {
     try {
+        const dataAtual = new Date();
+        const dataFormatada = dataAtual.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
+        const context = `Data e hora atuais do sistema: ${dataFormatada}. Use esta data de referência para calcular termos relativos ("mês passado", "ano passado", etc.) ou inferir o ano atual de meses citados sozinhos.`;
+
         const result = await model.generateContent([
             { text: SYSTEM_PROMPT },
-            { text: `Mensagem: "${textoMensagem}"` }
+            { text: `${context}\nMensagem: "${textoMensagem}"` }
         ]);
 
         let resposta = result.response.text().trim();
@@ -83,7 +89,13 @@ export async function classificarMensagem(textoMensagem) {
         return json;
     } catch (error) {
         console.error('Erro ao classificar mensagem com Gemini:', error.message);
-        return { tipo: 'irrelevante' };
+        
+        const msgErro = error.message ? error.message.toLowerCase() : '';
+        if (msgErro.includes('429') || msgErro.includes('quota') || msgErro.includes('limit') || msgErro.includes('exhausted')) {
+            return { tipo: 'erro', erro: 'limite_excedido' };
+        }
+        
+        return { tipo: 'erro', erro: 'desconhecido', mensagem: error.message };
     }
 }
 
