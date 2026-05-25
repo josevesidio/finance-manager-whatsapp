@@ -1,0 +1,8 @@
+debug/**
+node_modules
+.env
+storage
+client.log
+.wwebjs_auth
+.wwebjs_cache
+data/

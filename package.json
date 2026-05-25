@@ -1,0 +1,33 @@
+{
+  "name": "finance-manager-whatsapp",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/josevesidio/finance-manager-whatsapp.git"
+  },
+  "keywords": [],
+  "author": "José Victor Esidio",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/josevesidio/finance-manager-whatsapp/issues"
+  },
+  "homepage": "https://github.com/josevesidio/finance-manager-whatsapp#readme",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.2.2",
+    "node-cron": "^4.2.1",
+    "nodemon": "^3.1.10",
+    "qrcode-terminal": "^0.12.0",
+    "sequelize": "^6.37.7",
+    "sqlite3": "^6.0.1",
+    "whatsapp-web.js": "^1.34.6"
+  }
+}
