@@ -1,4 +1,5 @@
 import { Transaction } from '../model/transaction.js';
+import database from '../db/index.js';
 import { Op } from 'sequelize';
 
 export async function processarAssinaturas() {
@@ -37,18 +38,27 @@ export async function processarAssinaturas() {
         if (deveGerar) {
             console.log(`Gerando lançamento real para assinatura: ${sub.description}`);
             
-            // Cria um lançamento real do tipo 'saida'
-            await Transaction.create({
-                type: 'saida',
-                date: new Date(),
-                value: sub.value,
-                description: `[ASSINATURA] ${sub.description}`,
-                person: sub.person
-            });
+            const transactionSequelize = await database.sequelize.transaction();
+            try {
+                // Cria um lançamento real do tipo 'saida'
+                await Transaction.create({
+                    type: 'saida',
+                    date: new Date(),
+                    value: sub.value,
+                    description: `[ASSINATURA] ${sub.description}`,
+                    person: sub.person,
+                    category: sub.category || 'contas'
+                }, { transaction: transactionSequelize });
 
-            // Atualiza o registro template com a data da última geração
-            sub.lastGenerated = new Date();
-            await sub.save();
+                // Atualiza o registro template com a data da última geração
+                sub.lastGenerated = new Date();
+                await sub.save({ transaction: transactionSequelize });
+
+                await transactionSequelize.commit();
+            } catch (error) {
+                await transactionSequelize.rollback();
+                console.error(`Erro transacional ao processar assinatura "${sub.description}":`, error);
+            }
         }
     }
 }
