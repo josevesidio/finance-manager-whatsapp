@@ -10,7 +10,7 @@ export var Transaction = database.sequelize.define('transaction', {
     primaryKey: true
   },
   type: {
-    type: Sequelize.STRING, // 'entrada', 'saida', 'parcelado'
+    type: Sequelize.STRING, // 'income', 'expense', 'installment', 'subscription'
     allowNull: false,
   },
   date: {
@@ -55,7 +55,7 @@ export var Transaction = database.sequelize.define('transaction', {
   },
   // Campos para Assinaturas/Recorrência
   frequency: {
-    type: Sequelize.STRING, // 'mensal', 'anual'
+    type: Sequelize.STRING, // 'monthly', 'annual'
     allowNull: true,
   },
   isActive: {

@@ -2,223 +2,218 @@ import { Transaction } from '../model/transaction.js';
 import { User } from '../model/user.js';
 import { Op } from 'sequelize';
 
-export async function registrarEntrada(nome, valor, descricao, categoria = 'outros') {
+export async function registerIncome(name, value, description, category = 'outros') {
     return await Transaction.create({
-        type: 'entrada',
+        type: 'income',
         date: new Date(),
-        value: valor || 0,
-        description: descricao || '',
-        person: nome,
-        category: categoria
+        value: value || 0,
+        description: description || '',
+        person: name,
+        category: category
     });
 }
 
-export async function registrarSaida(nome, valor, descricao, categoria = 'outros', extras = {}) {
+export async function registerExpense(name, value, description, category = 'outros', extras = {}) {
     return await Transaction.create({
-        type: 'saida',
+        type: 'expense',
         date: new Date(),
-        value: valor || 0,
-        description: descricao || '',
-        person: nome,
-        category: categoria,
+        value: value || 0,
+        description: description || '',
+        person: name,
+        category: category,
         isSplit: extras.isSplit || false,
         originalValue: extras.originalValue || null
     });
 }
 
-export async function registrarParcelado(nome, valorTotal, valorParcela, totalParcelas, descricao, parcelaAtualRecebida, categoria = 'outros') {
+export async function registerInstallment(name, totalValue, installmentValue, totalInstallments, description, currentInstallmentReceived, category = 'outros') {
     const transactions = [];
-    const parcelas = totalParcelas || 1;
-    const parcelaInicial = parcelaAtualRecebida || 1;
-    const dataAtual = new Date();
+    const installments = totalInstallments || 1;
+    const initialInstallment = currentInstallmentReceived || 1;
+    const currentDate = new Date();
 
-    for (let i = parcelaInicial; i <= parcelas; i++) {
-        const dataParcela = new Date(dataAtual);
-        dataParcela.setMonth(dataAtual.getMonth() + (i - parcelaInicial));
+    for (let i = initialInstallment; i <= installments; i++) {
+        const installmentDate = new Date(currentDate);
+        installmentDate.setMonth(currentDate.getMonth() + (i - initialInstallment));
 
         transactions.push({
-            type: 'parcelado',
-            date: dataParcela,
-            value: valorTotal || 0,
-            valuePerMonth: valorParcela || 0,
+            type: 'installment',
+            date: installmentDate,
+            value: totalValue || 0,
+            valuePerMonth: installmentValue || 0,
             actuallyParcel: i,
-            totalParcel: parcelas,
-            description: `${descricao} (${i}/${parcelas})`,
-            person: nome,
-            category: categoria
+            totalParcel: installments,
+            description: `${description} (${i}/${installments})`,
+            person: name,
+            category: category
         });
     }
 
     return await Transaction.bulkCreate(transactions);
 }
 
-export async function registrarAssinatura(nome, valor, descricao, frequencia = 'mensal', categoria = 'contas') {
+export async function registerSubscription(name, value, description, frequency = 'monthly', category = 'contas') {
     return await Transaction.create({
-        type: 'assinatura',
+        type: 'subscription',
         date: new Date(),
-        value: valor || 0,
-        description: descricao || '',
-        person: nome,
-        frequency: frequencia,
-        category: categoria,
+        value: value || 0,
+        description: description || '',
+        person: name,
+        frequency: frequency,
+        category: category,
         isActive: true
     });
 }
 
-export async function registrarDivisao(nomeSolicitante, valorTotal, descricao, listaPessoas, categoria = 'outros') {
-    const totalPessoas = listaPessoas.length;
-    if (totalPessoas === 0) return [];
-    
-    const valorIndividual = parseFloat((valorTotal / totalPessoas).toFixed(2));
-    const transacoes = [];
+export async function registerSplit(requesterName, totalValue, description, peopleList, category = 'outros') {
+    const totalPeople = peopleList.length;
+    if (totalPeople === 0) return [];
 
-    for (const pessoa of listaPessoas) {
-        // Se a pessoa for "mim" ou "eu", assume o nome do solicitante
-        const nomeFinal = (pessoa.toLowerCase() === 'eu' || pessoa.toLowerCase() === 'mim') ? nomeSolicitante : pessoa;
-        
-        transacoes.push({
-            type: 'saida',
+    const individualValue = parseFloat((totalValue / totalPeople).toFixed(2));
+    const transactions = [];
+
+    for (const person of peopleList) {
+        const finalName = (person.toLowerCase() === 'eu' || person.toLowerCase() === 'mim') ? requesterName : person;
+
+        transactions.push({
+            type: 'expense',
             date: new Date(),
-            value: valorIndividual,
-            description: `[DIVISÃO] ${descricao}`,
-            person: nomeFinal,
-            category: categoria,
+            value: individualValue,
+            description: `[DIVISÃO] ${description}`,
+            person: finalName,
+            category: category,
             isSplit: true,
-            originalValue: valorTotal
+            originalValue: totalValue
         });
     }
 
-    return await Transaction.bulkCreate(transacoes);
+    return await Transaction.bulkCreate(transactions);
 }
 
-export async function obterResumoMensal(nomeUsuario, mes = null, ano = null) {
-    const agora = new Date();
-    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
-    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
+export async function getMonthlySummary(userName, month = null, year = null) {
+    const now = new Date();
+    const y = year !== null ? parseInt(year, 10) : now.getFullYear();
+    const m = month !== null ? parseInt(month, 10) - 1 : now.getMonth();
 
-    const inicioMes = new Date(a, m, 1, 0, 0, 0, 0);
-    const fimMes = new Date(a, m + 1, 0, 23, 59, 59, 999);
+    const monthStart = new Date(y, m, 1, 0, 0, 0, 0);
+    const monthEnd = new Date(y, m + 1, 0, 23, 59, 59, 999);
 
-    // 1. Busca todas as transações do usuário no mês atual (exceto templates de assinaturas)
-    const transacoes = await Transaction.findAll({
+    const transactions = await Transaction.findAll({
         where: {
-            person: nomeUsuario,
-            type: { [Op.ne]: 'assinatura' },
+            person: userName,
+            type: { [Op.ne]: 'subscription' },
             date: {
-                [Op.between]: [inicioMes, fimMes]
+                [Op.between]: [monthStart, monthEnd]
             }
         }
     });
 
-    let totalEntradas = 0;
-    let totalSaidas = 0;
-    const categorias = {};
+    let totalIncome = 0;
+    let totalExpenses = 0;
+    const categories = {};
 
-    transacoes.forEach(t => {
-        if (t.type === 'entrada') {
-            totalEntradas += t.value;
+    transactions.forEach(t => {
+        if (t.type === 'income') {
+            totalIncome += t.value;
         } else {
-            // Para saídas normais ou parcelas do mês
-            const valorGasto = t.type === 'parcelado' ? t.valuePerMonth : t.value;
-            totalSaidas += valorGasto;
+            const spentValue = t.type === 'installment' ? t.valuePerMonth : t.value;
+            totalExpenses += spentValue;
 
-            // Agrupa por categoria
             const cat = t.category || 'outros';
-            categorias[cat] = (categorias[cat] || 0) + valorGasto;
+            categories[cat] = (categories[cat] || 0) + spentValue;
         }
     });
 
-    // 2. Busca o limite de gastos cadastrado para o usuário
-    const usuario = await User.findOne({ where: { nome: nomeUsuario } });
-    const limiteGastos = usuario ? usuario.limiteGastos : null;
-    let porcentagemLimite = null;
-    
-    if (limiteGastos && limiteGastos > 0) {
-        porcentagemLimite = parseFloat(((totalSaidas / limiteGastos) * 100).toFixed(1));
+    const user = await User.findOne({ where: { name: userName } });
+    const spendingLimit = user ? user.spendingLimit : null;
+    let limitPercentage = null;
+
+    if (spendingLimit && spendingLimit > 0) {
+        limitPercentage = parseFloat(((totalExpenses / spendingLimit) * 100).toFixed(1));
     }
 
     return {
-        entradas: totalEntradas,
-        saidas: totalSaidas,
-        saldo: totalEntradas - totalSaidas,
-        categorias,
-        limiteGastos,
-        porcentagemLimite
+        income: totalIncome,
+        expenses: totalExpenses,
+        balance: totalIncome - totalExpenses,
+        categories,
+        spendingLimit,
+        limitPercentage
     };
 }
 
-export async function obterTransacoesMensais(mes = null, ano = null) {
-    const agora = new Date();
-    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
-    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
+export async function getMonthlyTransactions(month = null, year = null) {
+    const now = new Date();
+    const y = year !== null ? parseInt(year, 10) : now.getFullYear();
+    const m = month !== null ? parseInt(month, 10) - 1 : now.getMonth();
 
-    const inicioMes = new Date(a, m, 1, 0, 0, 0, 0);
-    const fimMes = new Date(a, m + 1, 0, 23, 59, 59, 999);
+    const monthStart = new Date(y, m, 1, 0, 0, 0, 0);
+    const monthEnd = new Date(y, m + 1, 0, 23, 59, 59, 999);
 
     return await Transaction.findAll({
         where: {
-            type: { [Op.ne]: 'assinatura' },
+            type: { [Op.ne]: 'subscription' },
             date: {
-                [Op.between]: [inicioMes, fimMes]
+                [Op.between]: [monthStart, monthEnd]
             }
         },
         order: [['date', 'ASC']]
     });
 }
 
-export async function buscarUltimosLancamentos(termoBusca, limite = 5, incluirAssinaturas = false) {
+export async function findRecentTransactions(searchTerm, limit = 5, includeSubscriptions = false) {
     const where = {};
-    if (termoBusca) {
-        where.description = { [Op.like]: `%${termoBusca}%` };
+    if (searchTerm) {
+        where.description = { [Op.like]: `%${searchTerm}%` };
     }
-    
-    if (!incluirAssinaturas) {
-        where.type = { [Op.ne]: 'assinatura' };
+
+    if (!includeSubscriptions) {
+        where.type = { [Op.ne]: 'subscription' };
     }
 
     return await Transaction.findAll({
         where,
         order: [['date', 'DESC']],
-        limit: limite
+        limit: limit
     });
 }
 
-export async function buscarAssinaturaAtivaPorDescricao(nome, descricao) {
+export async function findActiveSubscriptionByDescription(name, description) {
     return await Transaction.findOne({
         where: {
-            person: nome,
-            type: 'assinatura',
+            person: name,
+            type: 'subscription',
             isActive: true,
-            description: { [Op.like]: `%${descricao}%` }
+            description: { [Op.like]: `%${description}%` }
         }
     });
 }
 
-export async function desativarAssinatura(nome, descricao) {
-    const assinatura = await buscarAssinaturaAtivaPorDescricao(nome, descricao);
-    if (!assinatura) return null;
-    
-    assinatura.isActive = false;
-    await assinatura.save();
-    return assinatura;
+export async function deactivateSubscription(name, description) {
+    const subscription = await findActiveSubscriptionByDescription(name, description);
+    if (!subscription) return null;
+
+    subscription.isActive = false;
+    await subscription.save();
+    return subscription;
 }
 
-export async function atualizarLancamento(id, dados) {
-    return await Transaction.update(dados, {
+export async function updateTransaction(id, data) {
+    return await Transaction.update(data, {
         where: { id }
     });
 }
 
-export default { 
-    registrarEntrada, 
-    registrarSaida, 
-    registrarParcelado,
-    buscarUltimosLancamentos,
-    atualizarLancamento,
-    registrarAssinatura,
-    registrarDivisao,
-    obterResumoMensal,
-    obterTransacoesMensais,
-    buscarAssinaturaAtivaPorDescricao,
-    desativarAssinatura
+export default {
+    registerIncome,
+    registerExpense,
+    registerInstallment,
+    findRecentTransactions,
+    updateTransaction,
+    registerSubscription,
+    registerSplit,
+    getMonthlySummary,
+    getMonthlyTransactions,
+    findActiveSubscriptionByDescription,
+    deactivateSubscription
 };

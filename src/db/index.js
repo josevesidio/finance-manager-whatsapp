@@ -6,7 +6,6 @@ import fs from 'fs'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// Diretório onde o arquivo SQLite será armazenado
 const dataDir = path.resolve(__dirname, '../../data')
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
@@ -14,21 +13,56 @@ if (!fs.existsSync(dataDir)) {
 
 const dbPath = path.join(dataDir, 'finance-manager.sqlite')
 
-// Inicializa a conexão com o Sequelize usando SQLite
 const sequelize = new Sequelize({
   dialect: 'sqlite',
   storage: dbPath,
   logging: false,
-  // timezone: '-03:00'
 })
 
-// Função para testar a conexão e sincronizar as tabelas
+async function migrateLegacySchema() {
+  const queryInterface = sequelize.getQueryInterface()
+
+  try {
+    const userTable = await queryInterface.describeTable('users')
+
+    if (userTable.nome && !userTable.name) {
+      await sequelize.query('ALTER TABLE users RENAME COLUMN nome TO name')
+    }
+    if (userTable.limiteGastos && !userTable.spendingLimit) {
+      await sequelize.query('ALTER TABLE users RENAME COLUMN limiteGastos TO spendingLimit')
+    }
+  } catch {
+    // Table may not exist yet on first run
+  }
+
+  const typeMigrations = [
+    ['entrada', 'income'],
+    ['saida', 'expense'],
+    ['parcelado', 'installment'],
+    ['assinatura', 'subscription'],
+  ]
+
+  for (const [oldType, newType] of typeMigrations) {
+    await sequelize.query(
+      `UPDATE transactions SET type = :newType WHERE type = :oldType`,
+      { replacements: { oldType, newType } }
+    )
+  }
+
+  await sequelize.query(
+    `UPDATE transactions SET frequency = 'monthly' WHERE frequency = 'mensal'`
+  )
+  await sequelize.query(
+    `UPDATE transactions SET frequency = 'annual' WHERE frequency = 'anual'`
+  )
+}
+
 async function connectAndSync() {
   try {
     await sequelize.authenticate()
     console.log(`Banco de dados SQLite conectado: ${dbPath}`)
 
-    // Sincroniza todos os modelos com o banco de dados
+    await migrateLegacySchema()
     await sequelize.sync()
     console.log('Tabelas sincronizadas com sucesso!')
 

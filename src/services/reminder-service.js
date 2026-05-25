@@ -1,28 +1,28 @@
 import { Reminder } from '../model/reminder.js';
 
-export async function criarLembrete(pessoa, valor, descricao, diaVencimento) {
+export async function createReminder(person, value, description, dueDay) {
     return await Reminder.create({
-        person: pessoa,
-        value: valor || 0,
-        description: descricao || 'sem descrição',
-        dueDate: diaVencimento,
+        person: person,
+        value: value || 0,
+        description: description || 'sem descrição',
+        dueDate: dueDay,
         isActive: true
     });
 }
 
-export async function buscarLembretesDoDia(diaDoMes) {
+export async function findRemindersForDay(dayOfMonth) {
     return await Reminder.findAll({
         where: {
-            dueDate: diaDoMes,
+            dueDate: dayOfMonth,
             isActive: true
         }
     });
 }
 
-export async function listarLembretesAtivos(pessoa) {
+export async function listActiveReminders(person) {
     const where = { isActive: true };
-    if (pessoa) {
-        where.person = pessoa;
+    if (person) {
+        where.person = person;
     }
     return await Reminder.findAll({
         where,
@@ -30,18 +30,18 @@ export async function listarLembretesAtivos(pessoa) {
     });
 }
 
-export async function marcarLembretePago(id) {
-    const lembrete = await Reminder.findByPk(id);
-    if (!lembrete) throw new Error('Lembrete não encontrado');
-    
-    lembrete.isActive = false;
-    await lembrete.save();
-    return lembrete;
+export async function markReminderPaid(id) {
+    const reminder = await Reminder.findByPk(id);
+    if (!reminder) throw new Error('Lembrete não encontrado');
+
+    reminder.isActive = false;
+    await reminder.save();
+    return reminder;
 }
 
 export default {
-    criarLembrete,
-    buscarLembretesDoDia,
-    listarLembretesAtivos,
-    marcarLembretePago
+    createReminder,
+    findRemindersForDay,
+    listActiveReminders,
+    markReminderPaid
 };

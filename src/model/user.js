@@ -14,11 +14,11 @@ export var User = database.sequelize.define('user', {
     allowNull: false,
     unique: true,
   },
-  nome: {
+  name: {
     type: Sequelize.STRING,
     allowNull: false,
   },
-  limiteGastos: {
+  spendingLimit: {
     type: Sequelize.FLOAT,
     allowNull: true,
     defaultValue: null,

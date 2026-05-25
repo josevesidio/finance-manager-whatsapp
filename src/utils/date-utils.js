@@ -1,58 +1,54 @@
 /**
- * Parseia uma string de texto contendo informações de mês/ano e retorna um objeto estruturado.
- * Suporta formatos como:
+ * Parses a text string containing month/year information and returns a structured object.
+ * Supports formats such as:
  * - "mês passado", "mes passado"
  * - "este mês", "atual"
- * - "MM/AAAA", "MM/AA", "MM-AAAA", "MM-AA", "MM" (apenas o número do mês)
- * - Nomes de meses em português (ex: "janeiro", "maio", "maio de 2026")
- * 
- * @param {string} texto O texto contendo a data a ser interpretada
- * @returns {{ mes: number, ano: number }} Objeto contendo o mês (1-12) e o ano (quatro dígitos)
+ * - "MM/YYYY", "MM/YY", "MM-YYYY", "MM-YY", "MM" (month number only)
+ * - Portuguese month names (e.g. "janeiro", "maio", "maio de 2026")
+ *
+ * @param {string} text The text containing the date to interpret
+ * @returns {{ month: number, year: number }} Object with month (1-12) and year (four digits)
  */
-export function parsearMesAno(texto) {
-    if (!texto) {
-        const agora = new Date();
-        return { mes: agora.getMonth() + 1, ano: agora.getFullYear() };
+export function parseMonthYear(text) {
+    if (!text) {
+        const now = new Date();
+        return { month: now.getMonth() + 1, year: now.getFullYear() };
     }
 
-    const agora = new Date();
-    const textoLimpo = texto.trim().toLowerCase();
+    const now = new Date();
+    const cleanText = text.trim().toLowerCase();
 
-    // Casos especiais
-    if (textoLimpo === 'mês passado' || textoLimpo === 'mes passado') {
-        const dataRef = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
-        return { mes: dataRef.getMonth() + 1, ano: dataRef.getFullYear() };
+    if (cleanText === 'mês passado' || cleanText === 'mes passado') {
+        const refDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return { month: refDate.getMonth() + 1, year: refDate.getFullYear() };
     }
-    if (textoLimpo === 'este mês' || textoLimpo === 'este mes' || textoLimpo === 'atual' || textoLimpo === 'hoje') {
-        return { mes: agora.getMonth() + 1, ano: agora.getFullYear() };
+    if (cleanText === 'este mês' || cleanText === 'este mes' || cleanText === 'atual' || cleanText === 'hoje') {
+        return { month: now.getMonth() + 1, year: now.getFullYear() };
     }
 
-    // Tenta formato MM/AAAA ou MM/AA ou MM-AAAA ou MM-AA
-    const regexBarra = /^(\d{1,2})[/-](\d{2,4})$/;
-    const matchBarra = textoLimpo.match(regexBarra);
-    if (matchBarra) {
-        let mes = parseInt(matchBarra[1], 10);
-        let ano = parseInt(matchBarra[2], 10);
-        if (ano < 100) {
-            ano += 2000; // se informar ex: 26, vira 2026
+    const slashRegex = /^(\d{1,2})[/-](\d{2,4})$/;
+    const slashMatch = cleanText.match(slashRegex);
+    if (slashMatch) {
+        let month = parseInt(slashMatch[1], 10);
+        let year = parseInt(slashMatch[2], 10);
+        if (year < 100) {
+            year += 2000;
         }
-        if (mes >= 1 && mes <= 12) {
-            return { mes, ano };
+        if (month >= 1 && month <= 12) {
+            return { month, year };
         }
     }
 
-    // Tenta apenas o número do mês (se for um número isolado entre 1 e 12)
-    const regexNumeroUnico = /^(\d{1,2})$/;
-    const matchNumero = textoLimpo.match(regexNumeroUnico);
-    if (matchNumero) {
-        const mes = parseInt(matchNumero[1], 10);
-        if (mes >= 1 && mes <= 12) {
-            return { mes, ano: agora.getFullYear() };
+    const singleNumberRegex = /^(\d{1,2})$/;
+    const numberMatch = cleanText.match(singleNumberRegex);
+    if (numberMatch) {
+        const month = parseInt(numberMatch[1], 10);
+        if (month >= 1 && month <= 12) {
+            return { month, year: now.getFullYear() };
         }
     }
 
-    // Tenta nome do mês em português
-    const mesesMap = {
+    const monthsMap = {
         'janeiro': 1, 'jan': 1,
         'fevereiro': 2, 'fev': 2,
         'março': 3, 'marco': 3, 'mar': 3,
@@ -67,22 +63,19 @@ export function parsearMesAno(texto) {
         'dezembro': 12, 'dez': 12
     };
 
-    // Vemos se o texto contém algum dos meses do map
-    for (const key of Object.keys(mesesMap)) {
-        if (textoLimpo.includes(key)) {
-            // Verifica se tem ano mencionado no texto (ex: "maio de 2026" ou "maio 2026" ou "maio 26")
-            const matchAno = textoLimpo.match(/\b(20\d{2}|\d{2})\b/);
-            let ano = agora.getFullYear();
-            if (matchAno) {
-                const anoParsed = parseInt(matchAno[1], 10);
-                ano = anoParsed < 100 ? 2000 + anoParsed : anoParsed;
+    for (const key of Object.keys(monthsMap)) {
+        if (cleanText.includes(key)) {
+            const yearMatch = cleanText.match(/\b(20\d{2}|\d{2})\b/);
+            let year = now.getFullYear();
+            if (yearMatch) {
+                const parsedYear = parseInt(yearMatch[1], 10);
+                year = parsedYear < 100 ? 2000 + parsedYear : parsedYear;
             }
-            return { mes: mesesMap[key], ano };
+            return { month: monthsMap[key], year };
         }
     }
 
-    // Se não reconheceu, assume o mês atual
-    return { mes: agora.getMonth() + 1, ano: agora.getFullYear() };
+    return { month: now.getMonth() + 1, year: now.getFullYear() };
 }
 
-export default { parsearMesAno };
+export default { parseMonthYear };

@@ -1,509 +1,477 @@
-import { classificarMensagem } from '../../services/gemini-service.js';
-import { obterNomeUsuario, criarUsuario } from '../../services/user-service.js';
-import { 
-    registrarEntrada, 
-    registrarSaida, 
-    registrarParcelado, 
-    buscarUltimosLancamentos, 
-    atualizarLancamento, 
-    registrarAssinatura,
-    registrarDivisao,
-    obterResumoMensal,
-    obterTransacoesMensais,
-    buscarAssinaturaAtivaPorDescricao,
-    desativarAssinatura
+import { classifyMessage } from '../../services/gemini-service.js';
+import { getUserName, createUser } from '../../services/user-service.js';
+import {
+    registerIncome,
+    registerExpense,
+    registerInstallment,
+    findRecentTransactions,
+    updateTransaction,
+    registerSubscription,
+    registerSplit,
+    getMonthlySummary,
+    getMonthlyTransactions,
+    findActiveSubscriptionByDescription,
+    deactivateSubscription
 } from '../../services/finance-service.js';
-import { parsearMesAno } from '../../utils/date-utils.js';
-import { gerarCsvTransacoes } from '../../utils/csv-helper.js';
+import { parseMonthYear } from '../../utils/date-utils.js';
+import { generateTransactionsCsv } from '../../utils/csv-helper.js';
 import whatsapp from 'whatsapp-web.js';
 const { MessageMedia } = whatsapp;
-import { 
-    criarLembrete, 
-    listarLembretesAtivos, 
-    marcarLembretePago 
+import {
+    createReminder,
+    listActiveReminders,
+    markReminderPaid
 } from '../../services/reminder-service.js';
 import { User } from '../../model/user.js';
 import { commandsHelp } from '../commands/help.js';
 
-// Armazena os IDs que estão aguardando informar o nome
-// Formato: { 'whatsappId': { mensagemOriginal: message.body } }
-const aguardandoNome = new Map();
+const awaitingName = new Map();
+const awaitingSubscriptionConfirmation = new Map();
+const botMessages = new Set();
 
-// Armazena as assinaturas duplicadas aguardando confirmação Sim/Não
-const aguardandoConfirmacaoAssinatura = new Map();
-
-// Armazena os IDs das mensagens enviadas pelo bot para ignorá-las
-const mensagensDoBot = new Set();
-
-// Função auxiliar para enviar mensagem e rastrear o ID
-async function responderBot(message, texto) {
-    const msgEnviada = await message.reply(texto);
-    if (msgEnviada && msgEnviada.id) {
-        mensagensDoBot.add(msgEnviada.id._serialized);
+async function replyAsBot(message, text) {
+    const sentMessage = await message.reply(text);
+    if (sentMessage && sentMessage.id) {
+        botMessages.add(sentMessage.id._serialized);
     }
 }
 
-// Formatação do resumo mensal em texto
-async function formatarResumoMensal(nome, mes = null, ano = null) {
-    const resumo = await obterResumoMensal(nome, mes, ano);
-    
-    const agora = new Date();
-    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
-    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
-    const dataRef = new Date(a, m, 1);
-    const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-    const nomeMesCapitalizado = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
+async function formatMonthlySummary(name, month = null, year = null) {
+    const summary = await getMonthlySummary(name, month, year);
 
-    let texto = `💰 *Resumo Financeiro - ${nomeMesCapitalizado}*\n👤 Usuário: *${nome}*\n\n`;
-    texto += `🟢 *Entradas:* R$ ${resumo.entradas.toFixed(2)}\n`;
-    texto += `🔴 *Saídas/Gastos:* R$ ${resumo.saidas.toFixed(2)}\n`;
-    
-    const saldoEmoji = resumo.saldo >= 0 ? '🔵' : '⚠️';
-    texto += `${saldoEmoji} *Saldo:* R$ ${resumo.saldo.toFixed(2)}\n\n`;
+    const now = new Date();
+    const y = year !== null ? parseInt(year, 10) : now.getFullYear();
+    const m = month !== null ? parseInt(month, 10) - 1 : now.getMonth();
+    const refDate = new Date(y, m, 1);
+    const monthName = refDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    const capitalizedMonthName = monthName.charAt(0).toUpperCase() + monthName.slice(1);
 
-    if (resumo.limiteGastos) {
-        texto += `🎯 *Limite Mensal:* R$ ${resumo.limiteGastos.toFixed(2)}\n`;
-        texto += `📊 *Uso do Limite:* ${resumo.porcentagemLimite}%\n`;
-        if (resumo.porcentagemLimite >= 100) {
-            texto += `🚨 *Atenção! Você ultrapassou o limite em R$ ${(resumo.saidas - resumo.limiteGastos).toFixed(2)}!*\n`;
-        } else if (resumo.porcentagemLimite >= 80) {
-            texto += `⚠️ *Aviso: Você está próximo de atingir seu limite de gastos.*\n`;
+    let text = `💰 *Resumo Financeiro - ${capitalizedMonthName}*\n👤 Usuário: *${name}*\n\n`;
+    text += `🟢 *Entradas:* R$ ${summary.income.toFixed(2)}\n`;
+    text += `🔴 *Saídas/Gastos:* R$ ${summary.expenses.toFixed(2)}\n`;
+
+    const balanceEmoji = summary.balance >= 0 ? '🔵' : '⚠️';
+    text += `${balanceEmoji} *Saldo:* R$ ${summary.balance.toFixed(2)}\n\n`;
+
+    if (summary.spendingLimit) {
+        text += `🎯 *Limite Mensal:* R$ ${summary.spendingLimit.toFixed(2)}\n`;
+        text += `📊 *Uso do Limite:* ${summary.limitPercentage}%\n`;
+        if (summary.limitPercentage >= 100) {
+            text += `🚨 *Atenção! Você ultrapassou o limite em R$ ${(summary.expenses - summary.spendingLimit).toFixed(2)}!*\n`;
+        } else if (summary.limitPercentage >= 80) {
+            text += `⚠️ *Aviso: Você está próximo de atingir seu limite de gastos.*\n`;
         }
-        texto += `\n`;
+        text += `\n`;
     }
 
-    texto += `🗂️ *Gastos por Categoria:*\n`;
-    const cats = Object.keys(resumo.categorias);
+    text += `🗂️ *Gastos por Categoria:*\n`;
+    const cats = Object.keys(summary.categories);
     if (cats.length === 0) {
-        texto += `_Nenhum gasto registrado ainda._`;
+        text += `_Nenhum gasto registrado ainda._`;
     } else {
         cats.forEach(c => {
-            texto += `- *${c.charAt(0).toUpperCase() + c.slice(1)}*: R$ ${resumo.categorias[c].toFixed(2)}\n`;
+            text += `- *${c.charAt(0).toUpperCase() + c.slice(1)}*: R$ ${summary.categories[c].toFixed(2)}\n`;
         });
     }
 
-    return texto;
+    return text;
 }
 
-// Formatação do relatório completo (resumo + transações)
-async function formatarRelatorioCompleto(nome, mes = null, ano = null) {
-    const resumoFormatado = await formatarResumoMensal(nome, mes, ano);
-    
-    // Busca lançamentos de todos os usuários do período desejado
-    const meusLancamentos = await obterTransacoesMensais(mes, ano);
+async function formatFullReport(name, month = null, year = null) {
+    const formattedSummary = await formatMonthlySummary(name, month, year);
 
-    const agora = new Date();
-    const a = ano !== null ? parseInt(ano, 10) : agora.getFullYear();
-    const m = mes !== null ? parseInt(mes, 10) - 1 : agora.getMonth();
-    const dataRef = new Date(a, m, 1);
-    const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-    const nomeMesCapitalizado = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
+    const transactions = await getMonthlyTransactions(month, year);
 
-    let texto = resumoFormatado + `\n📝 *Lançamentos de ${nomeMesCapitalizado}:*\n`;
-    if (meusLancamentos.length === 0) {
-        texto += `_Nenhum lançamento encontrado para este período._`;
+    const now = new Date();
+    const y = year !== null ? parseInt(year, 10) : now.getFullYear();
+    const m = month !== null ? parseInt(month, 10) - 1 : now.getMonth();
+    const refDate = new Date(y, m, 1);
+    const monthName = refDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    const capitalizedMonthName = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+    let text = formattedSummary + `\n📝 *Lançamentos de ${capitalizedMonthName}:*\n`;
+    if (transactions.length === 0) {
+        text += `_Nenhum lançamento encontrado para este período._`;
     } else {
-        // Mostra os lançamentos do mês em texto, limitando a 15 itens
-        const limiteVisualizacao = meusLancamentos.slice(0, 15);
-        limiteVisualizacao.forEach(l => {
-            const dataStr = new Date(l.date).toLocaleDateString('pt-BR');
-            const valor = l.type === 'parcelado' ? l.valuePerMonth : l.value;
-            const sinal = l.type === 'entrada' ? '🟢 +' : '🔴 -';
-            texto += `[${dataStr}] (${l.person || 'N/A'}) ${sinal} R$ ${valor.toFixed(2)} - ${l.description} (${l.category || 'outros'})\n`;
+        const displayLimit = transactions.slice(0, 15);
+        displayLimit.forEach(t => {
+            const dateStr = new Date(t.date).toLocaleDateString('pt-BR');
+            const amount = t.type === 'installment' ? t.valuePerMonth : t.value;
+            const sign = t.type === 'income' ? '🟢 +' : '🔴 -';
+            text += `[${dateStr}] (${t.person || 'N/A'}) ${sign} R$ ${amount.toFixed(2)} - ${t.description} (${t.category || 'outros'})\n`;
         });
-        if (meusLancamentos.length > 15) {
-            texto += `\n_... e mais ${meusLancamentos.length - 15} lançamentos. Para ver tudo, peça o resumo em CSV!_\n`;
+        if (transactions.length > 15) {
+            text += `\n_... e mais ${transactions.length - 15} lançamentos. Para ver tudo, peça o resumo em CSV!_\n`;
         }
     }
 
-    return texto;
+    return text;
 }
 
-// Formatação de lembretes ativos
-async function formatarLembretes(nome) {
-    const lembretes = await listarLembretesAtivos(nome);
-    let texto = `📅 *Lembretes de Contas - ${nome}*\n\n`;
-    if (lembretes.length === 0) {
-        texto += `_Você não tem lembretes de contas ativos._`;
+async function formatReminders(name) {
+    const reminders = await listActiveReminders(name);
+    let text = `📅 *Lembretes de Contas - ${name}*\n\n`;
+    if (reminders.length === 0) {
+        text += `_Você não tem lembretes de contas ativos._`;
     } else {
-        lembretes.forEach(l => {
-            texto += `📌 *Dia ${l.dueDate}*: ${l.description} - R$ ${l.value.toFixed(2)} _(ID: ${l.id})_\n`;
+        reminders.forEach(r => {
+            text += `📌 *Dia ${r.dueDate}*: ${r.description} - R$ ${r.value.toFixed(2)} _(ID: ${r.id})_\n`;
         });
-        texto += `\n_Para pagar uma conta, envie: *!pago [ID]*_`;
+        text += `\n_Para pagar uma conta, envie: *!pago [ID]*_`;
     }
-    return texto;
+    return text;
 }
 
 export default {
     name: 'message_create',
     async execute(message) {
-        // Filtra apenas os chats monitorados (se configurado no .env)
         if (process.env.CHAT_MONITORIN && !process.env.CHAT_MONITORIN.split(',').includes(message.to)) {
             return;
         }
 
-        // Verifica de imediato e ignora se a mensagem contém emojis do bot
-        // Evitando loops rápidos e economizando processamento de IA
         const botEmojis = ['✅', '❌', '👋', '💰', '🛒', '💸', '💳', '📆', '🟢', '🔴', '⚠️', '🚨', '📌'];
         if (message.fromMe && botEmojis.some(emoji => message.body.startsWith(emoji))) {
             return;
         }
 
-        // Aguarda um pequeno delay para garantir sincronia do ID em mensagens do próprio bot
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        // Ignora mensagens enviadas pelo bot (rastreadas por ID)
-        if (mensagensDoBot.has(message.id._serialized)) {
-            mensagensDoBot.delete(message.id._serialized);
+        if (botMessages.has(message.id._serialized)) {
+            botMessages.delete(message.id._serialized);
             return;
         }
 
-        // Pega o ID de quem enviou (em grupos usa author, em chat privado usa from)
-        const remetenteId = message.author || message.from;
-        if (!remetenteId) return;
+        const senderId = message.author || message.from;
+        if (!senderId) return;
 
-        // Se o usuário está respondendo com seu nome
-        if (aguardandoNome.has(remetenteId)) {
-            const nomeInformado = message.body.trim();
+        if (awaitingName.has(senderId)) {
+            const providedName = message.body.trim();
 
-            if (nomeInformado.length < 2 || nomeInformado.length > 50) {
-                await responderBot(message, '❌ Nome inválido. Por favor, envie um nome válido (entre 2 e 50 caracteres).');
+            if (providedName.length < 2 || providedName.length > 50) {
+                await replyAsBot(message, '❌ Nome inválido. Por favor, envie um nome válido (entre 2 e 50 caracteres).');
                 return;
             }
 
-            await criarUsuario(remetenteId, nomeInformado);
+            await createUser(senderId, providedName);
 
-            const dadosPendentes = aguardandoNome.get(remetenteId);
-            aguardandoNome.delete(remetenteId);
+            const pendingData = awaitingName.get(senderId);
+            awaitingName.delete(senderId);
 
-            await responderBot(message, `✅ Prazer, *${nomeInformado}*! Seu nome foi salvo.\nAgora vou processar sua mensagem anterior...`);
+            await replyAsBot(message, `✅ Prazer, *${providedName}*! Seu nome foi salvo.\nAgora vou processar sua mensagem anterior...`);
 
-            // Reprocessa a mensagem original que ficou pendente
-            await processarMensagem(dadosPendentes.mensagemOriginal, remetenteId, nomeInformado, message);
+            await processMessage(pendingData.originalMessage, senderId, providedName, message);
             return;
         }
 
-        // Tenta obter o nome do usuário
-        const nome = await obterNomeUsuario(remetenteId);
+        const name = await getUserName(senderId);
 
-        if (!nome) {
-            // Não encontrou nome em nenhum lugar, pede ao usuário
-            aguardandoNome.set(remetenteId, { mensagemOriginal: message.body });
-            await responderBot(message, '👋 Olá! Eu sou o *Finance Manager*.\nPara começar, me diz qual é o seu nome?');
+        if (!name) {
+            awaitingName.set(senderId, { originalMessage: message.body });
+            await replyAsBot(message, '👋 Olá! Eu sou o *Finance Manager*.\nPara começar, me diz qual é o seu nome?');
         }
 
-        // Se o usuário está confirmando uma assinatura duplicada
-        if (aguardandoConfirmacaoAssinatura.has(remetenteId)) {
-            const resposta = message.body.trim().toLowerCase();
-            const dadosPendentes = aguardandoConfirmacaoAssinatura.get(remetenteId);
-            
-            if (resposta === 'sim' || resposta === 's') {
-                aguardandoConfirmacaoAssinatura.delete(remetenteId);
-                const resultado = dadosPendentes.resultado;
-                const cat = resultado.categoria || 'contas';
-                
+        if (awaitingSubscriptionConfirmation.has(senderId)) {
+            const answer = message.body.trim().toLowerCase();
+            const pendingData = awaitingSubscriptionConfirmation.get(senderId);
+
+            if (answer === 'sim' || answer === 's') {
+                awaitingSubscriptionConfirmation.delete(senderId);
+                const result = pendingData.result;
+                const category = result.category || 'contas';
+
                 try {
-                    await registrarAssinatura(nome, resultado.valor, resultado.descricao, resultado.frequencia, cat);
-                    const valorStr = resultado.valor ? `R$ ${resultado.valor.toFixed(2)}` : 'não informado';
-                    await responderBot(message, `✅ *Assinatura registrada com sucesso!*\n👤 Pessoa: ${nome}\n📝 Descrição: ${resultado.descricao}\n🗂️ Categoria: ${cat}\n💰 Valor: ${valorStr}\n📆 Recorrência: ${resultado.frequencia || 'mensal'}\n📌 Os lançamentos serão automáticos a partir de agora!`);
+                    await registerSubscription(name, result.value, result.description, result.frequency, category);
+                    const valueStr = result.value ? `R$ ${result.value.toFixed(2)}` : 'não informado';
+                    await replyAsBot(message, `✅ *Assinatura registrada com sucesso!*\n👤 Pessoa: ${name}\n📝 Descrição: ${result.description}\n🗂️ Categoria: ${category}\n💰 Valor: ${valueStr}\n📆 Recorrência: ${result.frequency || 'monthly'}\n📌 Os lançamentos serão automáticos a partir de agora!`);
                 } catch (error) {
                     console.error('Erro ao registrar assinatura confirmada:', error);
-                    await responderBot(message, '❌ Ocorreu um erro ao salvar o registro no banco de dados.');
+                    await replyAsBot(message, '❌ Ocorreu um erro ao salvar o registro no banco de dados.');
                 }
-            } else if (resposta === 'não' || resposta === 'nao' || resposta === 'n') {
-                aguardandoConfirmacaoAssinatura.delete(remetenteId);
-                await responderBot(message, '❌ *Cadastro de assinatura cancelado.*');
+            } else if (answer === 'não' || answer === 'nao' || answer === 'n') {
+                awaitingSubscriptionConfirmation.delete(senderId);
+                await replyAsBot(message, '❌ *Cadastro de assinatura cancelado.*');
             } else {
-                await responderBot(message, '❓ Resposta inválida. Por favor, responda apenas com *Sim* ou *Não* para confirmar a nova assinatura.');
+                await replyAsBot(message, '❓ Resposta inválida. Por favor, responda apenas com *Sim* ou *Não* para confirmar a nova assinatura.');
             }
             return;
         }
 
-        // --- INTERCEPTADOR DE COMANDOS DIRETOS (SEM IA) ---
-        const textoMsg = message.body.trim();
-        if (textoMsg.startsWith('!')) {
-            const args = textoMsg.slice(1).trim().split(/ +/);
-            const comando = args.shift().toLowerCase();
+        const messageText = message.body.trim();
+        if (messageText.startsWith('!')) {
+            const args = messageText.slice(1).trim().split(/ +/);
+            const command = args.shift().toLowerCase();
 
-            if (comando === 'commands' || comando === 'ajuda') {
-                const ajuda = commandsHelp(message);
-                await responderBot(message, ajuda);
-                return;
-            }
-            
-            if (comando === 'ping') {
-                await responderBot(message, '✅ Pong! O bot está ativo e respondendo.');
+            if (command === 'commands' || command === 'ajuda') {
+                const help = commandsHelp(message);
+                await replyAsBot(message, help);
                 return;
             }
 
-            if (comando === 'resumo' || comando === 'gastos') {
-                const textoArg = args.join(' ');
-                const { mes, ano } = parsearMesAno(textoArg);
-                const resumo = await formatarResumoMensal(nome, mes, ano);
-                await responderBot(message, resumo);
+            if (command === 'ping') {
+                await replyAsBot(message, '✅ Pong! O bot está ativo e respondendo.');
                 return;
             }
 
-            if (comando === 'relatorio') {
-                const textoArg = args.join(' ');
-                const { mes, ano } = parsearMesAno(textoArg);
-                const relatorio = await formatarRelatorioCompleto(nome, mes, ano);
-                await responderBot(message, relatorio);
+            if (command === 'resumo' || command === 'gastos') {
+                const argText = args.join(' ');
+                const { month, year } = parseMonthYear(argText);
+                const summary = await formatMonthlySummary(name, month, year);
+                await replyAsBot(message, summary);
                 return;
             }
 
-            if (comando === 'csv') {
-                const textoArg = args.join(' ');
-                const { mes, ano } = parsearMesAno(textoArg);
-                
+            if (command === 'relatorio') {
+                const argText = args.join(' ');
+                const { month, year } = parseMonthYear(argText);
+                const report = await formatFullReport(name, month, year);
+                await replyAsBot(message, report);
+                return;
+            }
+
+            if (command === 'csv') {
+                const argText = args.join(' ');
+                const { month, year } = parseMonthYear(argText);
+
                 try {
-                    const transacoes = await obterTransacoesMensais(mes, ano);
-                    if (transacoes.length === 0) {
-                        const dataRef = new Date(ano, mes - 1, 1);
-                        const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-                        await responderBot(message, `🗂️ Não foram encontrados lançamentos para o período de *${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}*.`);
+                    const transactions = await getMonthlyTransactions(month, year);
+                    if (transactions.length === 0) {
+                        const refDate = new Date(year, month - 1, 1);
+                        const monthName = refDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+                        await replyAsBot(message, `🗂️ Não foram encontrados lançamentos para o período de *${monthName.charAt(0).toUpperCase() + monthName.slice(1)}*.`);
                         return;
                     }
 
-                    const csvString = gerarCsvTransacoes(transacoes, nome, mes, ano);
+                    const csvString = generateTransactionsCsv(transactions, name, month, year);
                     const base64Data = Buffer.from(csvString, 'utf-8').toString('base64');
-                    
-                    const dataRef = new Date(ano, mes - 1, 1);
-                    const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long' });
-                    const filename = `resumo_${nomeMes.toLowerCase()}_${ano}.csv`;
-                    
+
+                    const refDate = new Date(year, month - 1, 1);
+                    const monthName = refDate.toLocaleDateString('pt-BR', { month: 'long' });
+                    const filename = `resumo_${monthName.toLowerCase()}_${year}.csv`;
+
                     const media = new MessageMedia('text/csv', base64Data, filename);
                     await message.reply(media);
                 } catch (err) {
                     console.error('Erro ao gerar CSV por comando:', err);
-                    await responderBot(message, '❌ Ocorreu um erro ao gerar o arquivo CSV.');
+                    await replyAsBot(message, '❌ Ocorreu um erro ao gerar o arquivo CSV.');
                 }
                 return;
             }
 
-            if (comando === 'limite') {
-                const valorLimite = parseFloat(args[0]);
-                if (isNaN(valorLimite) || valorLimite < 0) {
-                    await responderBot(message, '❌ Uso correto: *!limite [valor]*\nExemplo: `!limite 1500`');
+            if (command === 'limite') {
+                const limitValue = parseFloat(args[0]);
+                if (isNaN(limitValue) || limitValue < 0) {
+                    await replyAsBot(message, '❌ Uso correto: *!limite [valor]*\nExemplo: `!limite 1500`');
                     return;
                 }
-                const usuario = await User.findOne({ where: { whatsappId: remetenteId } });
-                if (usuario) {
-                    usuario.limiteGastos = valorLimite;
-                    await usuario.save();
-                    await responderBot(message, `✅ *Limite de gastos mensal configurado:* R$ ${valorLimite.toFixed(2)}`);
+                const user = await User.findOne({ where: { whatsappId: senderId } });
+                if (user) {
+                    user.spendingLimit = limitValue;
+                    await user.save();
+                    await replyAsBot(message, `✅ *Limite de gastos mensal configurado:* R$ ${limitValue.toFixed(2)}`);
                 } else {
-                    await responderBot(message, '❌ Usuário não encontrado no sistema.');
+                    await replyAsBot(message, '❌ Usuário não encontrado no sistema.');
                 }
                 return;
             }
 
-            if (comando === 'lembretes') {
-                const lembretes = await formatarLembretes(nome);
-                await responderBot(message, lembretes);
+            if (command === 'lembretes') {
+                const remindersText = await formatReminders(name);
+                await replyAsBot(message, remindersText);
                 return;
             }
 
-            if (comando === 'pago') {
-                const idLembrete = parseInt(args[0]);
-                if (isNaN(idLembrete)) {
-                    await responderBot(message, '❌ Uso correto: *!pago [ID_DO_LEMBRETE]*\nUse `!lembretes` para ver os IDs.');
+            if (command === 'pago') {
+                const reminderId = parseInt(args[0]);
+                if (isNaN(reminderId)) {
+                    await replyAsBot(message, '❌ Uso correto: *!pago [ID_DO_LEMBRETE]*\nUse `!lembretes` para ver os IDs.');
                     return;
                 }
                 try {
-                    const lembrete = await marcarLembretePago(idLembrete);
-                    
-                    // Transforma em lançamento real de saída
-                    await registrarSaida(nome, lembrete.value, `[PAGO] ${lembrete.description}`, 'contas');
-                    
-                    await responderBot(message, `✅ *Lembrete pago com sucesso!*\nA conta "${lembrete.description}" de R$ ${lembrete.value.toFixed(2)} foi marcada como paga e registrada em seus gastos.`);
+                    const reminder = await markReminderPaid(reminderId);
+
+                    await registerExpense(name, reminder.value, `[PAGO] ${reminder.description}`, 'contas');
+
+                    await replyAsBot(message, `✅ *Lembrete pago com sucesso!*\nA conta "${reminder.description}" de R$ ${reminder.value.toFixed(2)} foi marcada como paga e registrada em seus gastos.`);
                 } catch (err) {
-                    await responderBot(message, `❌ Erro ao pagar lembrete: ${err.message}`);
+                    await replyAsBot(message, `❌ Erro ao pagar lembrete: ${err.message}`);
                 }
                 return;
             }
         }
 
-        // Se não for comando direto, processa linguagem natural via Gemini
-        await processarMensagem(message.body, remetenteId, nome, message);
+        await processMessage(message.body, senderId, name, message);
     }
 };
 
-async function processarMensagem(textoMensagem, remetenteId, nome, message) {
-    const resultado = await classificarMensagem(textoMensagem);
+async function processMessage(messageText, senderId, name, message) {
+    const result = await classifyMessage(messageText);
 
-    console.log('Classificação do Gemini:', resultado);
+    console.log('Classificação do Gemini:', result);
 
-    if (resultado.tipo === 'erro') {
-        if (resultado.erro === 'limite_excedido') {
-            await responderBot(message, '⚠️ *Limite de IA Atingido!*\n\nO limite de requisições do Gemini foi excedido temporariamente (cota diária ou por minuto). Por favor, tente novamente em alguns instantes ou use os comandos diretos (ex: `!resumo`, `!csv`, `!ajuda`).');
+    if (result.type === 'error') {
+        if (result.error === 'limit_exceeded') {
+            await replyAsBot(message, '⚠️ *Limite de IA Atingido!*\n\nO limite de requisições do Gemini foi excedido temporariamente (cota diária ou por minuto). Por favor, tente novamente em alguns instantes ou use os comandos diretos (ex: `!resumo`, `!csv`, `!ajuda`).');
         } else {
-            console.error('Erro desconhecido na classificação da IA:', resultado.mensagem);
+            console.error('Erro desconhecido na classificação da IA:', result.message);
         }
         return;
     }
 
-    if (resultado.tipo === 'irrelevante') {
+    if (result.type === 'irrelevant') {
         return;
     }
 
-    let confirmacao = '';
+    let confirmation = '';
 
     try {
-        if (resultado.tipo === 'entrada') {
-            const cat = resultado.categoria || 'outros';
-            await registrarEntrada(nome, resultado.valor, resultado.descricao, cat);
-            const valor = resultado.valor ? `R$ ${resultado.valor.toFixed(2)}` : 'valor não identificado';
-            confirmacao = `✅ *Entrada registrada!*\n👤 Pessoa: ${nome}\n💰 Valor: ${valor}\n📝 Descrição: ${resultado.descricao || 'não informada'}\n🗂️ Categoria: ${cat}`;
+        if (result.type === 'income') {
+            const category = result.category || 'outros';
+            await registerIncome(name, result.value, result.description, category);
+            const value = result.value ? `R$ ${result.value.toFixed(2)}` : 'valor não identificado';
+            confirmation = `✅ *Entrada registrada!*\n👤 Pessoa: ${name}\n💰 Valor: ${value}\n📝 Descrição: ${result.description || 'não informada'}\n🗂️ Categoria: ${category}`;
         }
-        else if (resultado.tipo === 'saida') {
-            const cat = resultado.categoria || 'outros';
-            await registrarSaida(nome, resultado.valor, resultado.descricao, cat);
-            const valor = resultado.valor ? `R$ ${resultado.valor.toFixed(2)}` : 'valor não identificado';
-            confirmacao = `✅ *Saída registrada!*\n👤 Pessoa: ${nome}\n💸 Valor: ${valor}\n📝 Descrição: ${resultado.descricao || 'não informada'}\n🗂️ Categoria: ${cat}`;
-            
-            // Alerta de limite
-            const limiteAviso = await checarAlertaLimite(nome);
-            if (limiteAviso) confirmacao += `\n\n${limiteAviso}`;
-        }
-        else if (resultado.tipo === 'parcelado') {
-            const cat = resultado.categoria || 'outros';
-            await registrarParcelado(nome, resultado.valorTotal, resultado.valorParcela, resultado.totalParcelas, resultado.descricao, resultado.parcelaAtual, cat);
-            const valorTotal = resultado.valorTotal ? `R$ ${resultado.valorTotal.toFixed(2)}` : 'não informado';
-            const valorParcela = resultado.valorParcela ? `R$ ${resultado.valorParcela.toFixed(2)}` : 'não informado';
-            confirmacao = `✅ *Compra parcelada registrada!*\n👤 Pessoa: ${nome}\n🛒 Descrição: ${resultado.descricao || 'não informada'}\n🗂️ Categoria: ${cat}\n💳 Total: ${valorTotal}\n📆 Parcelas: ${resultado.totalParcelas}x de ${valorParcela}\n📌 Começando na: ${resultado.parcelaAtual || 1}ª parcela`;
-            
-            // Alerta de limite
-            const limiteAviso = await checarAlertaLimite(nome);
-            if (limiteAviso) confirmacao += `\n\n${limiteAviso}`;
-        }
-        else if (resultado.tipo === 'alteracao') {
-            const lancamentos = await buscarUltimosLancamentos(resultado.termoBusca, 5, true);
+        else if (result.type === 'expense') {
+            const category = result.category || 'outros';
+            await registerExpense(name, result.value, result.description, category);
+            const value = result.value ? `R$ ${result.value.toFixed(2)}` : 'valor não identificado';
+            confirmation = `✅ *Saída registrada!*\n👤 Pessoa: ${name}\n💸 Valor: ${value}\n📝 Descrição: ${result.description || 'não informada'}\n🗂️ Categoria: ${category}`;
 
-            if (lancamentos.length === 0) {
-                confirmacao = `❌ Não encontrei nenhum lançamento recente com "${resultado.termoBusca}" para alterar.`;
+            const limitWarning = await checkSpendingLimitAlert(name);
+            if (limitWarning) confirmation += `\n\n${limitWarning}`;
+        }
+        else if (result.type === 'installment') {
+            const category = result.category || 'outros';
+            await registerInstallment(name, result.totalValue, result.installmentValue, result.totalInstallments, result.description, result.currentInstallment, category);
+            const totalValue = result.totalValue ? `R$ ${result.totalValue.toFixed(2)}` : 'não informado';
+            const installmentValue = result.installmentValue ? `R$ ${result.installmentValue.toFixed(2)}` : 'não informado';
+            confirmation = `✅ *Compra parcelada registrada!*\n👤 Pessoa: ${name}\n🛒 Descrição: ${result.description || 'não informada'}\n🗂️ Categoria: ${category}\n💳 Total: ${totalValue}\n📆 Parcelas: ${result.totalInstallments}x de ${installmentValue}\n📌 Começando na: ${result.currentInstallment || 1}ª parcela`;
+
+            const limitWarning = await checkSpendingLimitAlert(name);
+            if (limitWarning) confirmation += `\n\n${limitWarning}`;
+        }
+        else if (result.type === 'update') {
+            const transactions = await findRecentTransactions(result.searchTerm, 5, true);
+
+            if (transactions.length === 0) {
+                confirmation = `❌ Não encontrei nenhum lançamento recente com "${result.searchTerm}" para alterar.`;
             } else {
-                const last = lancamentos[0];
-                const novosDados = {};
-                if (resultado.novoValor !== null) novosDados.value = resultado.novoValor;
-                if (resultado.novaDescricao !== null) novosDados.description = resultado.novaDescricao;
-                if (resultado.novaPessoa !== null) novosDados.person = resultado.novaPessoa;
+                const last = transactions[0];
+                const newData = {};
+                if (result.newValue !== null) newData.value = result.newValue;
+                if (result.newDescription !== null) newData.description = result.newDescription;
+                if (result.newPerson !== null) newData.person = result.newPerson;
 
-                if (Object.keys(novosDados).length === 0) {
-                    confirmacao = `❓ Não identifiquei o que você quer alterar no lançamento: "${last.description}".`;
+                if (Object.keys(newData).length === 0) {
+                    confirmation = `❓ Não identifiquei o que você quer alterar no lançamento: "${last.description}".`;
                 } else {
-                    await atualizarLancamento(last.id, novosDados);
-                    let prefixo = last.type === 'assinatura' ? '📌 *Assinatura alterada!*' : '✅ *Lançamento alterado!*';
-                    confirmacao = `${prefixo}\n\n*De:* ${last.description} (R$ ${last.value.toFixed(2)})\n*Para:* ${novosDados.description || last.description} (R$ ${(novosDados.value || last.value).toFixed(2)})`;
+                    await updateTransaction(last.id, newData);
+                    let prefix = last.type === 'subscription' ? '📌 *Assinatura alterada!*' : '✅ *Lançamento alterado!*';
+                    confirmation = `${prefix}\n\n*De:* ${last.description} (R$ ${last.value.toFixed(2)})\n*Para:* ${newData.description || last.description} (R$ ${(newData.value || last.value).toFixed(2)})`;
 
-                    if (last.type === 'assinatura') {
-                        confirmacao += `\n\n_Note: Mudanças em assinaturas afetam apenas os próximos lançamentos automáticos._`;
+                    if (last.type === 'subscription') {
+                        confirmation += `\n\n_Note: Mudanças em assinaturas afetam apenas os próximos lançamentos automáticos._`;
                     }
                 }
             }
         }
-        else if (resultado.tipo === 'assinatura') {
-            const assinaturaExistente = await buscarAssinaturaAtivaPorDescricao(nome, resultado.descricao);
-            
-            if (assinaturaExistente) {
-                // Guarda no Map para aguardar confirmação sim/não
-                aguardandoConfirmacaoAssinatura.set(remetenteId, { resultado, nome });
-                
-                const valorExistente = assinaturaExistente.value ? `R$ ${assinaturaExistente.value.toFixed(2)}` : 'não informado';
-                const valorNovo = resultado.valor ? `R$ ${resultado.valor.toFixed(2)}` : 'não informado';
-                
-                confirmacao = `⚠️ *Assinatura Duplicada Detectada!*\n\nVocê já possui uma assinatura ativa de *"${assinaturaExistente.description}"* no valor de *${valorExistente}*.\n\nTem certeza que deseja adicionar uma nova assinatura de *"${resultado.descricao}"* por *${valorNovo}*?\n\nResponda apenas com *Sim* ou *Não*.`;
+        else if (result.type === 'subscription') {
+            const existingSubscription = await findActiveSubscriptionByDescription(name, result.description);
+
+            if (existingSubscription) {
+                awaitingSubscriptionConfirmation.set(senderId, { result, name });
+
+                const existingValue = existingSubscription.value ? `R$ ${existingSubscription.value.toFixed(2)}` : 'não informado';
+                const newValue = result.value ? `R$ ${result.value.toFixed(2)}` : 'não informado';
+
+                confirmation = `⚠️ *Assinatura Duplicada Detectada!*\n\nVocê já possui uma assinatura ativa de *"${existingSubscription.description}"* no valor de *${existingValue}*.\n\nTem certeza que deseja adicionar uma nova assinatura de *"${result.description}"* por *${newValue}*?\n\nResponda apenas com *Sim* ou *Não*.`;
             } else {
-                const cat = resultado.categoria || 'contas';
-                await registrarAssinatura(nome, resultado.valor, resultado.descricao, resultado.frequencia, cat);
-                const valor = resultado.valor ? `R$ ${resultado.valor.toFixed(2)}` : 'não informado';
-                confirmacao = `✅ *Assinatura registrada!*\n👤 Pessoa: ${nome}\n📝 Descrição: ${resultado.descricao || 'não informada'}\n🗂️ Categoria: ${cat}\n💰 Valor: ${valor}\n📆 Recorrência: ${resultado.frequencia || 'mensal'}\n📌 Os lançamentos serão automáticos a partir de agora!`;
+                const category = result.category || 'contas';
+                await registerSubscription(name, result.value, result.description, result.frequency, category);
+                const value = result.value ? `R$ ${result.value.toFixed(2)}` : 'não informado';
+                confirmation = `✅ *Assinatura registrada!*\n👤 Pessoa: ${name}\n📝 Descrição: ${result.description || 'não informada'}\n🗂️ Categoria: ${category}\n💰 Valor: ${value}\n📆 Recorrência: ${result.frequency || 'monthly'}\n📌 Os lançamentos serão automáticos a partir de agora!`;
             }
         }
-        else if (resultado.tipo === 'cancelamento') {
-            const assinaturaCancelada = await desativarAssinatura(nome, resultado.descricao);
-            
-            if (assinaturaCancelada) {
-                confirmacao = `✅ *Assinatura cancelada com sucesso!*\n\nA recorrência de *"${assinaturaCancelada.description}"* foi desativada e não gerará novos lançamentos automáticos.`;
+        else if (result.type === 'cancellation') {
+            const canceledSubscription = await deactivateSubscription(name, result.description);
+
+            if (canceledSubscription) {
+                confirmation = `✅ *Assinatura cancelada com sucesso!*\n\nA recorrência de *"${canceledSubscription.description}"* foi desativada e não gerará novos lançamentos automáticos.`;
             } else {
-                confirmacao = `❌ Não encontrei nenhuma assinatura ativa de *"${resultado.descricao}"* para cancelar.`;
+                confirmation = `❌ Não encontrei nenhuma assinatura ativa de *"${result.description}"* para cancelar.`;
             }
         }
-        else if (resultado.tipo === 'divisao') {
-            const cat = resultado.categoria || 'lazer';
-            const pessoas = resultado.pessoas || [];
-            
-            await registrarDivisao(nome, resultado.valorTotal, resultado.descricao, pessoas, cat);
-            const valorIndividual = (resultado.valorTotal / pessoas.length).toFixed(2);
-            confirmacao = `✅ *Divisão de despesa registrada!*\n👤 Solicitante: ${nome}\n🛒 Descrição: ${resultado.descricao || 'não informada'}\n💰 Total: R$ ${resultado.valorTotal.toFixed(2)}\n👥 Divisão entre: ${pessoas.join(', ')}\n💸 Valor para cada: R$ ${valorIndividual}`;
+        else if (result.type === 'split') {
+            const category = result.category || 'lazer';
+            const people = result.people || [];
+
+            await registerSplit(name, result.totalValue, result.description, people, category);
+            const individualValue = (result.totalValue / people.length).toFixed(2);
+            confirmation = `✅ *Divisão de despesa registrada!*\n👤 Solicitante: ${name}\n🛒 Descrição: ${result.description || 'não informada'}\n💰 Total: R$ ${result.totalValue.toFixed(2)}\n👥 Divisão entre: ${people.join(', ')}\n💸 Valor para cada: R$ ${individualValue}`;
         }
-        else if (resultado.tipo === 'limite') {
-            const usuario = await User.findOne({ where: { whatsappId: remetenteId } });
-            if (usuario) {
-                usuario.limiteGastos = resultado.valor;
-                await usuario.save();
-                confirmacao = `✅ *Limite de gastos mensal configurado:* R$ ${resultado.valor.toFixed(2)}`;
+        else if (result.type === 'limit') {
+            const user = await User.findOne({ where: { whatsappId: senderId } });
+            if (user) {
+                user.spendingLimit = result.value;
+                await user.save();
+                confirmation = `✅ *Limite de gastos mensal configurado:* R$ ${result.value.toFixed(2)}`;
             } else {
-                confirmacao = `❌ Usuário não encontrado no sistema.`;
+                confirmation = `❌ Usuário não encontrado no sistema.`;
             }
         }
-        else if (resultado.tipo === 'lembrete') {
-            await criarLembrete(nome, resultado.valor, resultado.descricao, resultado.diaVencimento);
-            confirmacao = `✅ *Lembrete agendado com sucesso!*\n👤 Pessoa: ${nome}\n📝 Conta: ${resultado.descricao}\n💰 Valor: R$ ${resultado.valor.toFixed(2)}\n📆 Vencimento: Todo dia ${resultado.diaVencimento}\n📌 Eu avisarei no chat na manhã do vencimento.`;
+        else if (result.type === 'reminder') {
+            await createReminder(name, result.value, result.description, result.dueDay);
+            confirmation = `✅ *Lembrete agendado com sucesso!*\n👤 Pessoa: ${name}\n📝 Conta: ${result.description}\n💰 Valor: R$ ${result.value.toFixed(2)}\n📆 Vencimento: Todo dia ${result.dueDay}\n📌 Eu avisarei no chat na manhã do vencimento.`;
         }
-        else if (resultado.tipo === 'relatorio') {
-            const mes = resultado.mes;
-            const ano = resultado.ano;
-            
-            if (resultado.formato === 'csv') {
-                // Fluxo de geração e envio de arquivo CSV
-                const periodo = parsearMesAno(mes && ano ? `${mes}/${ano}` : (mes ? `${mes}` : null));
-                const transacoes = await obterTransacoesMensais(periodo.mes, periodo.ano);
-                
-                const dataRef = new Date(periodo.ano, periodo.mes - 1, 1);
-                const nomeMes = dataRef.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-                const nomeMesCapitalizado = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
-                
-                if (transacoes.length === 0) {
-                    confirmacao = `🗂️ Não foram encontrados lançamentos para o período de *${nomeMesCapitalizado}* para gerar o CSV.`;
+        else if (result.type === 'report') {
+            const month = result.month;
+            const year = result.year;
+
+            if (result.format === 'csv') {
+                const period = parseMonthYear(month && year ? `${month}/${year}` : (month ? `${month}` : null));
+                const transactions = await getMonthlyTransactions(period.month, period.year);
+
+                const refDate = new Date(period.year, period.month - 1, 1);
+                const monthName = refDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+                const capitalizedMonthName = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+                if (transactions.length === 0) {
+                    confirmation = `🗂️ Não foram encontrados lançamentos para o período de *${capitalizedMonthName}* para gerar o CSV.`;
                 } else {
                     try {
-                        const csvString = gerarCsvTransacoes(transacoes, nome, periodo.mes, periodo.ano);
+                        const csvString = generateTransactionsCsv(transactions, name, period.month, period.year);
                         const base64Data = Buffer.from(csvString, 'utf-8').toString('base64');
-                        const filename = `resumo_${dataRef.toLocaleDateString('pt-BR', { month: 'long' }).toLowerCase()}_${periodo.ano}.csv`;
-                        
+                        const filename = `resumo_${refDate.toLocaleDateString('pt-BR', { month: 'long' }).toLowerCase()}_${period.year}.csv`;
+
                         const media = new MessageMedia('text/csv', base64Data, filename);
                         await message.reply(media);
-                        confirmacao = `📊 Aqui está o seu relatório em CSV referente a *${nomeMesCapitalizado}*!`;
+                        confirmation = `📊 Aqui está o seu relatório em CSV referente a *${capitalizedMonthName}*!`;
                     } catch (csvErr) {
                         console.error('Erro ao gerar CSV via IA:', csvErr);
-                        confirmacao = '❌ Desculpe, ocorreu um erro técnico ao gerar o seu arquivo CSV.';
+                        confirmation = '❌ Desculpe, ocorreu um erro técnico ao gerar o seu arquivo CSV.';
                     }
                 }
             } else {
-                // Fluxo de texto normal
-                const periodo = parsearMesAno(mes && ano ? `${mes}/${ano}` : (mes ? `${mes}` : null));
-                confirmacao = await formatarRelatorioCompleto(nome, periodo.mes, periodo.ano);
+                const period = parseMonthYear(month && year ? `${month}/${year}` : (month ? `${month}` : null));
+                confirmation = await formatFullReport(name, period.month, period.year);
             }
         }
 
-        await responderBot(message, confirmacao);
+        await replyAsBot(message, confirmation);
     } catch (error) {
         console.error('Erro ao registrar no banco de dados:', error);
-        await responderBot(message, '❌ Ocorreu um erro ao salvar o registro no banco de dados.');
+        await replyAsBot(message, '❌ Ocorreu um erro ao salvar o registro no banco de dados.');
     }
 }
 
-// Verifica se o usuário excedeu metas de limite de despesas
-async function checarAlertaLimite(nome) {
-    const resumo = await obterResumoMensal(nome);
-    if (!resumo.limiteGastos) return null;
-    
-    if (resumo.porcentagemLimite >= 100) {
-        return `🚨 *ALERTA:* Você ultrapassou 100% do seu limite de gastos mensal! (Gasto: R$ ${resumo.saidas.toFixed(2)} de R$ ${resumo.limiteGastos.toFixed(2)})`;
+async function checkSpendingLimitAlert(name) {
+    const summary = await getMonthlySummary(name);
+    if (!summary.spendingLimit) return null;
+
+    if (summary.limitPercentage >= 100) {
+        return `🚨 *ALERTA:* Você ultrapassou 100% do seu limite de gastos mensal! (Gasto: R$ ${summary.expenses.toFixed(2)} de R$ ${summary.spendingLimit.toFixed(2)})`;
     }
-    if (resumo.porcentagemLimite >= 80) {
-        return `⚠️ *AVISO:* Você atingiu ${resumo.porcentagemLimite}% do seu limite de gastos mensal! (Gasto: R$ ${resumo.saidas.toFixed(2)} de R$ ${resumo.limiteGastos.toFixed(2)})`;
+    if (summary.limitPercentage >= 80) {
+        return `⚠️ *AVISO:* Você atingiu ${summary.limitPercentage}% do seu limite de gastos mensal! (Gasto: R$ ${summary.expenses.toFixed(2)} de R$ ${summary.spendingLimit.toFixed(2)})`;
     }
     return null;
 }

@@ -2,88 +2,76 @@ import { User } from '../model/user.js';
 import client from '../utils/client.js';
 
 /**
- * Busca o usuário pelo WhatsApp ID.
- * Retorna o registro do banco ou null se não existir.
+ * Finds a user by WhatsApp ID.
+ * Returns the database record or null if not found.
  */
-export async function buscarUsuario(whatsappId) {
+export async function findUser(whatsappId) {
     return await User.findOne({ where: { whatsappId } });
 }
 
 /**
- * Extrai o número de telefone do WhatsApp ID.
- * Ex: '5511999999999@c.us' → '(55) 11 99999-9999'
+ * Extracts the phone number from a WhatsApp ID.
+ * Ex: '5511999999999@c.us' → '11 99999-9999'
  */
-function formatarTelefone(whatsappId) {
-    const numero = whatsappId.replace(/@.*$/, '');
+function formatPhone(whatsappId) {
+    const number = whatsappId.replace(/@.*$/, '');
 
-    // Formato brasileiro: DDD + número
-    if (numero.length >= 12) {
-        const ddd = numero.slice(2, 4);
-        const parte1 = numero.slice(4, -4);
-        const parte2 = numero.slice(-4);
-        return `${ddd} ${parte1}-${parte2}`;
+    if (number.length >= 12) {
+        const areaCode = number.slice(2, 4);
+        const part1 = number.slice(4, -4);
+        const part2 = number.slice(-4);
+        return `${areaCode} ${part1}-${part2}`;
     }
 
-    return numero;
+    return number;
 }
 
 /**
- * Verifica se já existe outro usuário com o mesmo nome.
- * Se existir, adiciona o telefone ao nome para diferenciar.
+ * Resolves duplicate names by appending the phone number.
  */
-async function resolverNomeDuplicado(whatsappId, nome) {
-    const duplicado = await User.findOne({ where: { nome } });
+async function resolveDuplicateName(whatsappId, name) {
+    const duplicate = await User.findOne({ where: { name } });
 
-    if (duplicado) {
-        const telefone = formatarTelefone(whatsappId);
-        return `${nome} (${telefone})`;
+    if (duplicate) {
+        const phone = formatPhone(whatsappId);
+        return `${name} (${phone})`;
     }
 
-    return nome;
+    return name;
 }
 
 /**
- * Cria um novo usuário com o WhatsApp ID e nome informados.
- * Se o nome já existir no banco, adiciona o telefone para diferenciar.
+ * Creates a new user with the given WhatsApp ID and name.
  */
-export async function criarUsuario(whatsappId, nome) {
-    const nomeResolvido = await resolverNomeDuplicado(whatsappId, nome);
-    return await User.create({ whatsappId, nome: nomeResolvido });
+export async function createUser(whatsappId, name) {
+    const resolvedName = await resolveDuplicateName(whatsappId, name);
+    return await User.create({ whatsappId, name: resolvedName });
 }
 
 /**
- * Busca o nome do usuário pelo WhatsApp ID.
- * 
- * Fluxo:
- * 1. Verifica se já existe no banco → retorna o nome salvo
- * 2. Se não existe, tenta pegar o nome do contato no WhatsApp
- * 3. Se conseguir o nome do WhatsApp, salva no banco e retorna
- * 4. Se não conseguir, retorna null (precisa perguntar à pessoa)
+ * Returns the user's name by WhatsApp ID.
  */
-export async function obterNomeUsuario(whatsappId) {
-    // 1. Já está no banco?
-    const usuario = await buscarUsuario(whatsappId);
-    if (usuario) {
-        return usuario.nome;
+export async function getUserName(whatsappId) {
+    const user = await findUser(whatsappId);
+    if (user) {
+        return user.name;
     }
 
-    // 2. Tenta pegar o nome do contato no WhatsApp
     try {
         if (!whatsappId) return null;
-        const contato = await client.getContactById(whatsappId);
-        const nomeWhatsapp = contato.pushname || contato.name || null;
+        const contact = await client.getContactById(whatsappId);
+        const whatsappName = contact.pushname || contact.name || null;
 
-        if (nomeWhatsapp) {
-            await criarUsuario(whatsappId, nomeWhatsapp);
-            const usuarioCriado = await buscarUsuario(whatsappId);
-            return usuarioCriado.nome;
+        if (whatsappName) {
+            await createUser(whatsappId, whatsappName);
+            const createdUser = await findUser(whatsappId);
+            return createdUser.name;
         }
     } catch (error) {
         console.error('Erro ao buscar contato do WhatsApp:', error.message);
     }
 
-    // 3. Não encontrou nome em lugar nenhum
     return null;
 }
 
-export default { buscarUsuario, criarUsuario, obterNomeUsuario };
+export default { findUser, createUser, getUserName };

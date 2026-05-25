@@ -2,47 +2,44 @@ import { Transaction } from '../model/transaction.js';
 import database from '../db/index.js';
 import { Op } from 'sequelize';
 
-export async function processarAssinaturas() {
+export async function processSubscriptions() {
     console.log('--- Processando Assinaturas Recorrentes (Tabela Única) ---');
-    const agora = new Date();
-    
-    // Busca registros que são do tipo 'assinatura' e estão ativos
-    const templates = await Transaction.findAll({ 
-        where: { 
-            type: 'assinatura',
-            isActive: true 
-        } 
+    const now = new Date();
+
+    const templates = await Transaction.findAll({
+        where: {
+            type: 'subscription',
+            isActive: true
+        }
     });
 
     for (const sub of templates) {
-        let deveGerar = false;
-        
-        // Se nunca foi gerada, gera agora se a data de criação já passou ou é hoje
+        let shouldGenerate = false;
+
         if (!sub.lastGenerated) {
-            deveGerar = true;
+            shouldGenerate = true;
         } else {
-            const ultimaData = new Date(sub.lastGenerated);
-            
-            if (sub.frequency === 'mensal') {
-                const proximoMes = new Date(ultimaData);
-                proximoMes.setMonth(proximoMes.getMonth() + 1);
-                if (agora >= proximoMes) deveGerar = true;
-            } 
-            else if (sub.frequency === 'anual') {
-                const proximoAno = new Date(ultimaData);
-                proximoAno.setFullYear(proximoAno.getFullYear() + 1);
-                if (agora >= proximoAno) deveGerar = true;
+            const lastDate = new Date(sub.lastGenerated);
+
+            if (sub.frequency === 'monthly') {
+                const nextMonth = new Date(lastDate);
+                nextMonth.setMonth(nextMonth.getMonth() + 1);
+                if (now >= nextMonth) shouldGenerate = true;
+            }
+            else if (sub.frequency === 'annual') {
+                const nextYear = new Date(lastDate);
+                nextYear.setFullYear(nextYear.getFullYear() + 1);
+                if (now >= nextYear) shouldGenerate = true;
             }
         }
 
-        if (deveGerar) {
+        if (shouldGenerate) {
             console.log(`Gerando lançamento real para assinatura: ${sub.description}`);
-            
+
             const transactionSequelize = await database.sequelize.transaction();
             try {
-                // Cria um lançamento real do tipo 'saida'
                 await Transaction.create({
-                    type: 'saida',
+                    type: 'expense',
                     date: new Date(),
                     value: sub.value,
                     description: `[ASSINATURA] ${sub.description}`,
@@ -50,7 +47,6 @@ export async function processarAssinaturas() {
                     category: sub.category || 'contas'
                 }, { transaction: transactionSequelize });
 
-                // Atualiza o registro template com a data da última geração
                 sub.lastGenerated = new Date();
                 await sub.save({ transaction: transactionSequelize });
 
@@ -63,4 +59,4 @@ export async function processarAssinaturas() {
     }
 }
 
-export default { processarAssinaturas };
+export default { processSubscriptions };
