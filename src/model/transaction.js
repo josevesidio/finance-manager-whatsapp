@@ -40,6 +40,19 @@ export var Transaction = database.sequelize.define('transaction', {
   person: {
     type: Sequelize.STRING,
   },
+  category: {
+    type: Sequelize.STRING,
+    allowNull: true,
+  },
+  isSplit: {
+    type: Sequelize.BOOLEAN,
+    allowNull: true,
+    defaultValue: false,
+  },
+  originalValue: {
+    type: Sequelize.FLOAT,
+    allowNull: true,
+  },
   // Campos para Assinaturas/Recorrência
   frequency: {
     type: Sequelize.STRING, // 'mensal', 'anual'

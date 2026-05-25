@@ -17,6 +17,11 @@ export var User = database.sequelize.define('user', {
   nome: {
     type: Sequelize.STRING,
     allowNull: false,
+  },
+  limiteGastos: {
+    type: Sequelize.FLOAT,
+    allowNull: true,
+    defaultValue: null,
   }
 })
 
