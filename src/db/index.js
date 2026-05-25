@@ -35,26 +35,32 @@ async function migrateLegacySchema() {
     // Table may not exist yet on first run
   }
 
-  const typeMigrations = [
-    ['entrada', 'income'],
-    ['saida', 'expense'],
-    ['parcelado', 'installment'],
-    ['assinatura', 'subscription'],
-  ]
+  try {
+    await queryInterface.describeTable('transactions')
 
-  for (const [oldType, newType] of typeMigrations) {
+    const typeMigrations = [
+      ['entrada', 'income'],
+      ['saida', 'expense'],
+      ['parcelado', 'installment'],
+      ['assinatura', 'subscription'],
+    ]
+
+    for (const [oldType, newType] of typeMigrations) {
+      await sequelize.query(
+        `UPDATE transactions SET type = :newType WHERE type = :oldType`,
+        { replacements: { oldType, newType } }
+      )
+    }
+
     await sequelize.query(
-      `UPDATE transactions SET type = :newType WHERE type = :oldType`,
-      { replacements: { oldType, newType } }
+      `UPDATE transactions SET frequency = 'monthly' WHERE frequency = 'mensal'`
     )
+    await sequelize.query(
+      `UPDATE transactions SET frequency = 'annual' WHERE frequency = 'anual'`
+    )
+  } catch {
+    // Table may not exist yet on first run
   }
-
-  await sequelize.query(
-    `UPDATE transactions SET frequency = 'monthly' WHERE frequency = 'mensal'`
-  )
-  await sequelize.query(
-    `UPDATE transactions SET frequency = 'annual' WHERE frequency = 'anual'`
-  )
 }
 
 async function connectAndSync() {
